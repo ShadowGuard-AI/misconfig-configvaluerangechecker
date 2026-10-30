@@ -1,3 +1,5 @@
+![Banner](banner.png)
+
 # misconfig-ConfigValueRangeChecker
 Enforces value ranges and types for configuration parameters based on a simple rule set. Prevents misconfigurations caused by out-of-range values or incorrect data types. - Focused on Check for misconfigurations in configuration files or infrastructure definitions
 
