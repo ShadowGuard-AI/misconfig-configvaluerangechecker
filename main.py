@@ -83,6 +83,25 @@ class ConfigValueRangeChecker:
             logging.error(f"Error loading rules file: {e}")
             return False
 
+    def _resolve_parameter(self, parameter):
+        """
+        Resolves a parameter name against the configuration data,
+        walking nested mappings for a dotted name such as
+        database.port.
+
+        Returns:
+            tuple: (True, value) when the parameter is present,
+            (False, None) when any step of the path is absent.
+        """
+        if not isinstance(parameter, str) or not parameter:
+            return False, None
+        current = self.config_data
+        for part in parameter.split('.'):
+            if not isinstance(current, dict) or part not in current:
+                return False, None
+            current = current[part]
+        return True, current
+
     def validate_config(self):
         """
         Validates the configuration data against the loaded rules.
@@ -97,6 +116,14 @@ class ConfigValueRangeChecker:
             logging.error("Rules data is not loaded.")
             return False
 
+        # The rules file must hold a list of rule objects. Any other
+        # shape is a rules error with a plain statement, not a traceback.
+        if not isinstance(self.rules_data, list) or not all(
+            isinstance(rule, dict) for rule in self.rules_data
+        ):
+            logging.error("Rules file must contain a JSON list of rule objects, each with parameter, type, and optional min and max fields.")
+            return False
+
         is_valid = True
         for rule in self.rules_data:
             parameter = rule.get('parameter')
@@ -104,21 +131,33 @@ class ConfigValueRangeChecker:
             min_value = rule.get('min')
             max_value = rule.get('max')
 
-            try:
-                value = self.config_data.get(parameter)
+            known_types = ('integer', 'float', 'string', 'boolean', 'list')
+            if data_type not in known_types:
+                logging.error(f"Rule for parameter '{parameter}' has unknown type '{data_type}'. Known types are: {', '.join(known_types)}.")
+                is_valid = False
+                continue
 
-                if value is None:
-                    logging.warning(f"Parameter '{parameter}' not found in configuration.")
+            try:
+                # Resolve the parameter, walking nested mappings for a
+                # dotted name such as database.port. A ruled parameter
+                # that is absent from the configuration is invalid.
+                found, value = self._resolve_parameter(parameter)
+
+                if not found:
+                    logging.error(f"Parameter '{parameter}' not found in configuration. A ruled parameter that is absent is invalid.")
+                    is_valid = False
                     continue
 
-                # Type validation
+                # Type validation. bool is a subclass of int in Python,
+                # so booleans are rejected explicitly for numeric rules:
+                # true must not pass an integer rule as the value 1.
                 if data_type == 'integer':
-                    if not isinstance(value, int):
+                    if isinstance(value, bool) or not isinstance(value, int):
                         logging.error(f"Parameter '{parameter}' has incorrect type. Expected integer, got {type(value).__name__}.")
                         is_valid = False
                         continue
                 elif data_type == 'float':
-                    if not isinstance(value, (int, float)):  # Allow int to be converted to float
+                    if isinstance(value, bool) or not isinstance(value, (int, float)):  # Allow int to be converted to float
                         logging.error(f"Parameter '{parameter}' has incorrect type. Expected float, got {type(value).__name__}.")
                         is_valid = False
                         continue
@@ -147,8 +186,13 @@ class ConfigValueRangeChecker:
                         logging.error(f"Parameter '{parameter}' is out of range. Value {value} is greater than maximum {max_value}.")
                         is_valid = False
                 elif data_type == 'string':
-                  #Optional string length validation could be added here.
-                  pass
+                    # For a string rule, min and max are length bounds.
+                    if min_value is not None and len(value) < min_value:
+                        logging.error(f"Parameter '{parameter}' is out of range. Length {len(value)} is less than minimum length {min_value}.")
+                        is_valid = False
+                    if max_value is not None and len(value) > max_value:
+                        logging.error(f"Parameter '{parameter}' is out of range. Length {len(value)} is greater than maximum length {max_value}.")
+                        is_valid = False
             except Exception as e:
                 logging.error(f"Error validating parameter '{parameter}': {e}")
                 is_valid = False
