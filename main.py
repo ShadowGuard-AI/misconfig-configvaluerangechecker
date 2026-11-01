@@ -99,6 +99,10 @@ class ConfigValueRangeChecker:
         for part in parameter.split('.'):
             if not isinstance(current, dict) or part not in current:
                 return False, None
+            # Each part must be a mapping key exactly as written. A key
+            # that itself contains a dot cannot be named by a rule, and a
+            # list index cannot be a step, so parameters inside lists are
+            # outside what a rule can reach.
             current = current[part]
         return True, current
 
@@ -109,6 +113,12 @@ class ConfigValueRangeChecker:
         Returns:
             bool: True if the configuration is valid, False otherwise.
         """
+        # This tests the loaded value, not whether loading happened,
+        # so a config that loaded as an empty mapping and a rules file
+        # that loaded as an empty list both report themselves as not
+        # loaded. An empty rules list therefore fails the run rather
+        # than meaning no rules, and the message points at the wrong
+        # cause.
         if not self.config_data:
             logging.error("Configuration data is not loaded.")
             return False
@@ -152,6 +162,11 @@ class ConfigValueRangeChecker:
                 # so booleans are rejected explicitly for numeric rules:
                 # true must not pass an integer rule as the value 1.
                 if data_type == 'integer':
+                    # A parameter present with a null value reaches these tests
+                    # and fails whichever type the rule names, so it is reported
+                    # as the wrong type rather than as a parameter holding
+                    # nothing. The distinction matters when an author left a
+                    # placeholder null on purpose to be filled in later.
                     if isinstance(value, bool) or not isinstance(value, int):
                         logging.error(f"Parameter '{parameter}' has incorrect type. Expected integer, got {type(value).__name__}.")
                         is_valid = False
@@ -178,7 +193,18 @@ class ConfigValueRangeChecker:
                          continue
 
                 # Range validation
+                # Range means two different things by type: magnitude for
+                # numbers, length for strings in the branch below, and
+                # nothing at all for booleans and lists, whose min and max in
+                # a rule are read and then silently ignored. A rule writer
+                # who set a maximum list length gets no error and no check.
                 if data_type in ('integer', 'float'):
+                    # The bounds in a rule are never checked themselves. A
+                    # minimum written as text in the rules file raises on this
+                    # comparison, is caught by the handler around the rule, and
+                    # surfaces as a generic error for that parameter, and a rule
+                    # whose minimum is above its maximum fails every value while
+                    # looking like two ordinary range findings.
                     if min_value is not None and value < min_value:
                         logging.error(f"Parameter '{parameter}' is out of range. Value {value} is less than minimum {min_value}.")
                         is_valid = False
